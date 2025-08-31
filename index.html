@@ -2,19 +2,19 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>NKN Mesh — Peers & Low-Latency Video</title>
+  <title>NKN Mesh — Solid Multi-Peer Video (Stable TX/RX, ACK %, Mobile-First)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <script src="https://unpkg.com/nkn-sdk@1.3.6/dist/nkn.min.js"></script>
-  <script async src="https://unpkg.com/es-module-shims@1.10.0/dist/es-module-shims.js"></script>
   <style>
     :root { --bg:#0b0b0b; --fg:#eee; --muted:#9aa0a6; --line:#1b1b1b; --ok:#30cf6b; --warn:#f7b500; --err:#e84d4d; }
     *{box-sizing:border-box}
     html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-    .wrap{display:grid;grid-template-columns:380px 1fr;gap:14px;height:100%;padding:14px;max-width:1600px;margin:0 auto}
+    .wrap{display:grid;grid-template-columns:380px 1fr;gap:14px;min-height:100%;padding:14px;max-width:1700px;margin:0 auto}
     .card{border:1px solid var(--line);border-radius:12px;background:#0f1011;padding:12px}
     h1{margin:0 0 10px;font-size:18px}
     label{display:block;font-size:12px;color:var(--muted);margin:8px 0 6px}
-    input[type="text"], input[type="range"]{height:36px;width:100%;background:#000;border:1px solid #242424;border-radius:10px;color:var(--fg);padding:8px 10px}
+    input[type="text"], input[type="range"], select{height:36px}
+    input[type="text"], select{width:100%;background:#000;border:1px solid #242424;border-radius:10px;color:var(--fg);padding:8px 10px}
     .status{display:flex;flex-direction:column;gap:6px}
     .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
     .dot{width:10px;height:10px;border-radius:50%;background:#444;border:1px solid #222}
@@ -23,26 +23,34 @@
     .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
     .badge{display:inline-flex;align-items:center;gap:6px;border:1px solid #252525;border-radius:999px;padding:2px 8px;font-size:12px;background:#0a0a0a}
     .kv{display:inline-flex;gap:6px;align-items:center;background:#0a0a0a;border:1px solid #222;border-radius:8px;padding:4px 8px}
+
     #peerList{display:flex;flex-direction:column;gap:8px}
-    .peer{display:flex;align-items:center;gap:10px;border:1px solid #212224;background:#0b0c0d;border-radius:10px;padding:8px}
-    .peer .grow{flex:1 1 auto; min-width:0}
+    .peer{display:grid;grid-template-columns:auto 120px 1fr auto;gap:10px;border:1px solid #212224;background:#0b0c0d;border-radius:10px;padding:8px}
     .peer .name{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-    .peer button{height:32px;background:#000;border:1px solid #fff;border-radius:8px;color:#fff;padding:0 10px;cursor:pointer}
+    .peer .btns{display:flex;gap:6px;align-items:center}
+    .peer button{background:#111;border:1px solid #444;border-radius:10px;color:#fff;padding:0 12px;height:32px;cursor:pointer}
+    .peer button:active{transform:translateY(1px)}
     .peer button:disabled{opacity:.5;cursor:not-allowed}
-    .col{display:flex;flex-direction:column;gap:10px}
-    .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-    .thumbs{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:10px}
-    .thumb{border:1px solid #222;border-radius:10px;background:#0a0a0a;padding:8px}
-    .thumb header{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
-    canvas.rx{width:100%;height:auto;display:block;background:#000;border-radius:8px}
-    video#localPrev{width:100%;max-height:220px;background:#000;border-radius:8px}
+
+    .preview{width:100%; aspect-ratio:4/3; height:auto; display:flex;align-items:center;justify-content:center;border:1px solid #222;border-radius:8px;background:#000;overflow:hidden}
+    .preview canvas{display:block;width:100%;height:auto;border-radius:6px;background:#000}
+
+    .localVideoBox{display:grid;grid-template-columns:minmax(120px,40%) 1fr;gap:10px;align-items:center}
+    .localVideo{width:100%;max-height:180px;border:1px solid #222;border-radius:8px;background:#000;object-fit:cover}
+
+    @media (max-width: 900px){
+      .wrap{grid-template-columns:1fr;gap:12px;padding:10px}
+      .localVideoBox{grid-template-columns:1fr}
+      .peer{grid-template-columns:auto 1fr;grid-auto-rows:auto}
+      .peer .btns{grid-column:1 / -1}
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <!-- LEFT: Controls -->
-    <div class="card col">
-      <h1>NKN Mesh — Peers & Low-Latency Video</h1>
+    <!-- LEFT -->
+    <div class="card col" style="display:flex;flex-direction:column;gap:10px">
+      <h1>NKN Mesh — Multi-Peer Video</h1>
 
       <div class="card">
         <label>Primary Signaller Public Key (64-hex) — override</label>
@@ -59,382 +67,442 @@
       </div>
 
       <div class="card">
-        <div class="row"><span class="badge">Local Video</span><span class="tiny">Click a peer to start/stop streaming</span></div>
-        <video id="localPrev" muted playsinline></video>
-        <div class="grid2" style="margin-top:8px">
+        <div class="row"><span class="badge">Local Video</span><span class="tiny">Click any peer’s “Stream” to send</span></div>
+        <div class="localVideoBox">
+          <video id="localVideo" class="localVideo" muted playsinline autoplay></video>
           <div>
-            <label>Target FPS</label>
-            <input id="fpsSlider" type="range" min="3" max="30" step="1" value="12" />
-            <div class="tiny"><span id="fpsLbl">12</span> fps (source encode cadence)</div>
-          </div>
-          <div>
-            <label>Scale (downsize)</label>
-            <input id="sSlider" type="range" min="0.4" max="1.0" step="0.05" value="0.7" />
-            <div class="tiny">Lower = fewer pixels</div>
-          </div>
-          <div>
-            <label>Compression (JPEG quality)</label>
-            <input id="qSlider" type="range" min="0.2" max="0.95" step="0.05" value="0.55" />
-            <div class="tiny">Lower = smaller frames</div>
-          </div>
-          <div>
-            <label>Target size (KB)</label>
-            <input id="kbSlider" type="range" min="80" max="900" step="20" value="400" />
-            <div class="tiny">Hard cap per frame</div>
-          </div>
-          <div>
-            <label><input id="bwChk" type="checkbox" checked /> Grayscale</label>
-            <div class="tiny">Monochrome saves bytes</div>
-          </div>
-          <div>
-            <label>Live metrics</label>
-            <div class="row" style="gap:10px">
-              <span class="kv"><span>Src FPS</span><strong id="mFps">—</strong></span>
-              <span class="kv"><span>Avg KB</span><strong id="mSize">—</strong></span>
-              <span class="kv"><span>Sent</span><strong id="mSent">0</strong></span>
-              <span class="kv"><span>Dropped</span><strong id="mDrop">0</strong></span>
+            <div class="row" style="gap:10px;flex-wrap:wrap">
+              <div>
+                <label>Target FPS</label>
+                <input id="fpsSlider" type="range" min="4" max="30" step="1" value="15" />
+                <div class="tiny"><span id="fpsLbl">15</span> fps (global encoder cadence)</div>
+              </div>
+              <div>
+                <label>Scale (downsize)</label>
+                <input id="sSlider" type="range" min="0.4" max="1.0" step="0.05" value="0.7" />
+                <div class="tiny">Lower = fewer pixels</div>
+              </div>
+              <div>
+                <label>Quality</label>
+                <select id="fmtQ">
+                  <option value="jpeg:0.60" selected>JPEG 0.60</option>
+                  <option value="jpeg:0.70">JPEG 0.70</option>
+                  <option value="webp:0.60">WebP 0.60</option>
+                  <option value="webp:0.70">WebP 0.70</option>
+                </select>
+              </div>
+              <div>
+                <label>Max KB / frame</label>
+                <input id="kbSlider" type="range" min="80" max="900" step="20" value="420" />
+                <div class="tiny"><span id="kbLbl">420</span> KB cap</div>
+              </div>
+              <div class="row" style="gap:8px">
+                <span class="kv"><span>Src FPS</span><strong id="mFps">—</strong></span>
+                <span class="kv"><span>Avg KB</span><strong id="mSize">—</strong></span>
+                <span class="kv"><span>Sent</span><strong id="mSent">0</strong></span>
+                <span class="kv"><span>Dropped</span><strong id="mDrop">0</strong></span>
+              </div>
+            </div>
+            <div class="tiny" style="margin-top:6px">
+              Single encoder → latest frame broadcast to all active peers (per-peer backpressure + ACK%).
             </div>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- RIGHT: Peer list + incoming -->
+    <!-- RIGHT -->
     <div class="card col">
       <div class="row" style="justify-content:space-between;align-items:center">
         <div class="badge">Peers</div>
         <div class="tiny">Your addr: <span id="myAddr" class="mono">—</span> • pub: <span id="myPub" class="mono">—</span></div>
       </div>
       <div id="peerList"></div>
-
-      <div class="row" style="justify-content:space-between;align-items:center;margin-top:6px">
-        <div class="badge">Incoming Video</div>
-        <div class="tiny">Auto-accept; shows newest frame only</div>
-      </div>
-      <div id="incoming" class="thumbs"></div>
     </div>
   </div>
 
-  <script>
-    // ───────────── tiny helpers & UI
-    const $ = s => document.querySelector(s);
-    const shortHex = (s,a=6,b=6)=>s?(s.slice(0,a)+'…'+s.slice(-b)):'—';
-    const isHex64 = s => /^[0-9a-f]{64}$/i.test((s||'').trim());
-    const now = ()=>Date.now();
-    const fmtAgo = ms => { if(ms<1500) return 'now'; const s=Math.floor(ms/1000); if(s<60) return s+'s'; const m=Math.floor(s/60); if(m<60) return m+'m'; const h=Math.floor(m/60); if(h<24) return h+'h'; const d=Math.floor(h/24); return d+'d'; };
-    const setNkn=(t,cls)=>{$('#txtNkn').textContent=t;$('#dotNkn').className='dot '+(cls||'');};
-    const setSig=(t,cls)=>{$('#txtSig').textContent=t;$('#dotSig').className='dot '+(cls||'');};
-    const setSigMeta=t=>{$('#txtSigMeta').textContent=t;};
+<script>
+/* ============ helpers & UI ============ */
+const $ = s => document.querySelector(s);
+const shortHex = (s,a=6,b=6)=>s?(s.slice(0,a)+'…'+s.slice(-b)):'—';
+const isHex64 = s => /^[0-9a-f]{64}$/i.test((s||'').trim());
+const now = ()=>Date.now();
+const fmtAgo = ms => { if(ms<1500) return 'now'; const s=Math.floor(ms/1000); if(s<60) return s+'s'; const m=Math.floor(s/60); if(m<60) return m+'m'; const h=Math.floor(m/60); if(h<24) return h+'h'; const d=Math.floor(h/24); return d+'d'; };
+const setNkn=(t,cls)=>{$('#txtNkn').textContent=t;$('#dotNkn').className='dot '+(cls||'');};
+const setSig=(t,cls)=>{$('#txtSig').textContent=t;$('#dotSig').className='dot '+(cls||'');};
+const setSigMeta=t=>{$('#txtSigMeta').textContent=t;};
 
-    const LS={ SEED:'NKN_SEED_HEX_V1', SIGHEX:'NKN_SIG_HEX', PEERBOOK:'NKN_PEERBOOK_V2', KNOWN_IDS:'NKN_KNOWN_IDS_V2' };
-    const DEFAULT_SIG_HEX='5a0a81a8e4d6538a81e59d04057611a779f762da49c5eaf79a96badb91788c0c';
+const LS={ SEED:'NKN_SEED_HEX_V1', SIGHEX:'NKN_SIG_HEX', PEERBOOK:'NKN_PEERBOOK_V2', KNOWN_IDS:'NKN_KNOWN_IDS_V2' };
+const DEFAULT_SIG_HEX='5a0a81a8e4d6538a81e59d04057611a779f762da49c5eaf79a96badb91788c0c';
 
-    // seed
-    const toHex=u8=>Array.from(u8).map(b=>b.toString(16).padStart(2,'0')).join('');
-    function getOrCreateSeed(){let hex=localStorage.getItem(LS.SEED); if(/^[0-9a-f]{64}$/i.test(hex||''))return hex; const u=new Uint8Array(32); crypto.getRandomValues(u); hex=toHex(u); localStorage.setItem(LS.SEED,hex); return hex;}
+const toHex=u8=>Array.from(u8).map(b=>b.toString(16).padStart(2,'0')).join('');
+function getOrCreateSeed(){let hex=localStorage.getItem(LS.SEED); if(/^[0-9a-f]{64}$/i.test(hex||''))return hex; const u=new Uint8Array(32); crypto.getRandomValues(u); hex=toHex(u); localStorage.setItem(LS.SEED,hex); return hex;}
 
-    // ───────────── mesh state (trimmed chatter for performance)
-    let client=null,selfPub=null,selfAddr=null;
-    let signallerHex='', signallerPrefix='signal';
+function u8ToBase64(u8){ let out='', CHUNK=0x8000; for(let i=0;i<u8.length;i+=CHUNK){ out += String.fromCharCode.apply(null, u8.subarray(i,i+CHUNK)); } return btoa(out); }
+function b64ToBlob(b64, mime){ const s=atob(b64), n=s.length, u8=new Uint8Array(n); for(let i=0;i<n;i++) u8[i]=s.charCodeAt(i); return new Blob([u8], {type:mime}); }
 
-    const peers=new Map(); // pub -> {addr,lastTs,isVestigial,tx:{fps,sizeKB}}
-    const knownIdsByPub=new Map(); const idSet=(pub)=>{let s=knownIdsByPub.get(pub); if(!s){s=new Set(['peer','web','signal']); knownIdsByPub.set(pub,s);} return s;};
-    const persistKnownIds=()=>{const obj={}; for(const [k,set] of knownIdsByPub.entries()) obj[k]=[...set]; localStorage.setItem(LS.KNOWN_IDS,JSON.stringify(obj));};
-    (function loadKnownIds(){try{const t=localStorage.getItem(LS.KNOWN_IDS); if(!t) return; const j=JSON.parse(t); for(const [k,arr] of Object.entries(j)) knownIdsByPub.set(k,new Set(arr));}catch{}})();
+/* ============ mesh state ============ */
+let client=null,selfPub=null,selfAddr=null;
+let signallerHex='', signallerPrefix='signal';
 
-    // addr metrics pool
-    const addrPool=new Map(); // addr -> {lastSeen,lastAck,rttMs,updates,failures,lastProbe}
-    function poolAdd(addr,when=now()){ if(!addr) return; const m=addrPool.get(addr)||{lastSeen:0,lastAck:0,rttMs:null,updates:0,failures:0,lastProbe:0}; m.lastSeen=Math.max(m.lastSeen,when); addrPool.set(addr,m); updateSigMeta(); }
-    function poolNoteAck(addr,rtt=null){ const m=addrPool.get(addr)||{lastSeen:0,lastAck:0,rttMs:null,updates:0,failures:0,lastProbe:0}; m.lastAck=now(); if(rtt!=null) m.rttMs=rtt; addrPool.set(addr,m); updateSigMeta(); }
-    function poolNoteUpdate(addr){ const m=addrPool.get(addr)||{lastSeen:0,lastAck:0,rttMs:null,updates:0,failures:0,lastProbe:0}; m.updates+=1; m.lastSeen=now(); addrPool.set(addr,m); updateSigMeta(); }
-    function poolNoteTimeout(addr){ const m=addrPool.get(addr)||{lastSeen:0,lastAck:0,rttMs:null,updates:0,failures:0,lastProbe:0}; m.failures+=1; addrPool.set(addr,m); updateSigMeta(); }
+const peers=new Map(); // pub -> {addr,lastTs,isVestigial}
+const knownIdsByPub=new Map(); const idSet=(pub)=>{let s=knownIdsByPub.get(pub); if(!s){s=new Set(['peer','web','signal']); knownIdsByPub.set(pub,s);} return s;};
+const persistKnownIds=()=>{const obj={}; for(const [k,set] of knownIdsByPub.entries()) obj[k]=[...set]; localStorage.setItem(LS.KNOWN_IDS,JSON.stringify(obj));};
+(function loadKnownIds(){try{const t=localStorage.getItem(LS.KNOWN_IDS); if(!t) return; const j=JSON.parse(t); for(const [k,arr] of Object.entries(j)) knownIdsByPub.set(k,new Set(arr));}catch{}})();
 
-    function ensurePeer(pub,{addr=null,ts=now(),vestigial=false}={}){const p=(peers.get(pub)||{addr:null,lastTs:0,isVestigial:false,tx:{fps:0,sizeKB:0}}); if(addr) p.addr=addr; if(ts>(p.lastTs||0)) p.lastTs=ts; p.isVestigial=!!vestigial; peers.set(pub,p); renderPeerList();}
-    function addressesForPub(pub){const ids=idSet(pub); const set=new Set(); const ent=peers.get(pub); if(ent?.addr) set.add(ent.addr); ids.forEach(id=>set.add(`${id}.${pub}`)); return [...set];}
-    function targets(max=200){const set=new Set(); if(isHex64(signallerHex)) set.add(`${signallerPrefix}.${signallerHex}`); for(const a of addrPool.keys()) set.add(a); for(const [pub,ent] of peers.entries()){ if(ent.addr) set.add(ent.addr); idSet(pub).forEach(id=>set.add(`${id}.${pub}`)); } const out=[]; for(const a of set.values()){ if(a!==selfAddr) out.push(a); if(out.length>=max) break; } return out;}
+const addrPool=new Map(); // addr -> {lastSeen,lastAck,rttMs,updates,failures,lastProbe}
+const lastLive=(m)=>Math.max(m?.lastAck||0, m?.lastSeen||0);
+function poolAdd(addr,when=now()){ if(!addr) return; const m=addrPool.get(addr)||{lastSeen:0,lastAck:0,rttMs:null,updates:0,failures:0,lastProbe:0}; m.lastSeen=Math.max(m.lastSeen,when); addrPool.set(addr,m); updateSigMeta(); }
+function poolNoteAck(addr,rtt=null){ const m=addrPool.get(addr)||{lastSeen:0,lastAck:0,rttMs:null,updates:0,failures:0,lastProbe:0}; m.lastAck=now(); if(rtt!=null) m.rttMs=rtt; addrPool.set(addr,m); updateSigMeta(); }
+function poolNoteUpdate(addr){ const m=addrPool.get(addr)||{lastSeen:0,lastAck:0,rttMs:null,updates:0,failures:0,lastProbe:0}; m.lastSeen=now(); m.updates+=1; addrPool.set(addr,m); updateSigMeta(); }
+function isPeerOnline(pub){ return addressesForPub(pub).some(a => (now()- (addrPool.get(a)?.lastAck||addrPool.get(a)?.lastSeen||0)) < 45000); }
+function onlineCount(){let n=0; for(const [addr,m] of addrPool.entries()) if((now()-(m.lastAck||m.lastSeen||0))<15000) n++; return n;}
+function updateSigMeta(){
+  let best=null,bRtt=Infinity,bSeen=0;
+  for(const [addr,m] of addrPool.entries()){
+    const r=m.rttMs==null?Infinity:m.rttMs; const s=Math.max(m.lastAck||0,m.lastSeen||0);
+    if(r<bRtt||(r===bRtt&&s>bSeen)){best=addr; bRtt=r; bSeen=s;}
+  }
+  const live=onlineCount(), total=addrPool.size;
+  if(!best){ setSig('Mesh: discovering…','warn'); setSigMeta(`targets: ${total} • online: ${live} • latency: —`); }
+  else { const lastSeenStr=bSeen?`${fmtAgo(now()-bSeen)} ago`:'—'; const rtt=(bRtt===Infinity)?'—':`${Math.round(bRtt)} ms`; setSig(`Mesh: ${shortHex(best,7,6)} • ${live}/${total} online`,'ok'); setSigMeta(`last seen: ${lastSeenStr} • latency: ${rtt}`); }
+}
 
-    function persistPeerbook(){const out={}; for(const [pub,ent] of peers.entries()) out[pub]={addr:ent.addr,lastTs:ent.lastTs}; localStorage.setItem(LS.PEERBOOK,JSON.stringify(out));}
-    (function loadPeerbook(){try{const txt=localStorage.getItem(LS.PEERBOOK); if(!txt) return; const j=JSON.parse(txt); const t=now(); for(const [pub,v] of Object.entries(j)){ const addr=v.addr||`web.${pub}`; ensurePeer(pub,{addr,ts:v.lastTs||(t-300000),vestigial:true}); idSet(pub); poolAdd(addr,t); idSet(pub).forEach(id=>poolAdd(`${id}.${pub}`,t)); }}catch{}})();
+function ensurePeer(pub,{addr=null,ts=now(),vestigial=false}={}){const p=(peers.get(pub)||{addr:null,lastTs:0,isVestigial:false}); if(addr) p.addr=addr; if(ts>(p.lastTs||0)) p.lastTs=ts; p.isVestigial=!!vestigial; peers.set(pub,p); ensurePeerRow(pub); updatePeerUI(pub);}
 
-    const seenIds=new Map(); setInterval(()=>{const cut=now()-120000; for(const [id,ts] of seenIds.entries()) if(ts<cut) seenIds.delete(id);},15000);
-    function markSeen(msg){const id=(msg&&typeof msg.id==='string')?msg.id:`${msg?.type||'?'}|${msg?.from||'?'}|${msg?.ts||0}`; const t=now(); const prev=seenIds.get(id); if(prev&&(t-prev)<60000) return true; seenIds.set(id,t); return false;}
+/* ============ roster / heartbeat ============ */
+const SEND_OPTS={ noReply:true, maxHoldingSeconds:1 };
+async function rawSend(to,text){ try{ return await client.send(to,text,SEND_OPTS); }catch(e){ throw e; } }
 
-    const SEND_OPTS={ noReply:true, maxHoldingSeconds:1 };
-    function sendRaw(to,text){ try{ return client.send(to,text,SEND_OPTS); }catch{ return Promise.reject(new Error('send failed')); }}
-    function bestAddrForPub(pub){
-      const list = addressesForPub(pub);
-      let best=null,bRtt=Infinity,bSeen=0;
-      for(const a of list){ const m=addrPool.get(a)||{}; const r=(m.rttMs==null)?Infinity:m.rttMs; const s=m.lastAck||0; if(r<bRtt||(r===bRtt&&s>bSeen)){best=a; bRtt=r; bSeen=s;} }
-      return best || list[0];
-    }
-    async function sendToBest(pub, text){
-      const list = addressesForPub(pub);
-      // sort by best known rtt/ack
-      list.sort((a,b)=>{
-        const ma=addrPool.get(a)||{}, mb=addrPool.get(b)||{};
-        const ra = ma.rttMs==null?1e12:ma.rttMs, rb=mb.rttMs==null?1e12:mb.rttMs;
-        if(ra!==rb) return ra-rb;
-        return (mb.lastAck||0)-(ma.lastAck||0);
-      });
-      for(const to of list){
-        try{ await sendRaw(to, text); return true; }catch{}
+function addressesForPub(pub){const ids=idSet(pub); const set=new Set(); const ent=peers.get(pub); if(ent?.addr) set.add(ent.addr); ids.forEach(id=>set.add(`${id}.${pub}`)); return [...set];}
+function bestAddrForPub(pub){
+  const list = addressesForPub(pub);
+  let best=null,bRtt=Infinity,bSeen=0;
+  for(const a of list){ const m=addrPool.get(a)||{}; const r=(m.rttMs==null)?Infinity:m.rttMs; const s=Math.max(m.lastAck||0,m.lastSeen||0); if(r<bRtt||(r===bRtt&&s>bSeen)){best=a; bRtt=r; bSeen=s;} }
+  return best || list[0];
+}
+async function sendToBest(pub,text){
+  const list=addressesForPub(pub).sort((a,b)=>{
+    const ma=addrPool.get(a)||{}, mb=addrPool.get(b)||{};
+    const ra=ma.rttMs==null?1e12:ma.rttMs, rb=mb.rttMs==null?1e12:mb.rttMs;
+    if(ra!==rb) return ra-rb;
+    return (Math.max(mb.lastAck||0,mb.lastSeen||0))-(Math.max(ma.lastAck||0,ma.lastSeen||0));
+  });
+  for(const to of list){ try{ await rawSend(to,text); return true; }catch{} }
+  if(isHex64(signallerHex)){ try{ await rawSend(`${signallerPrefix}.${signallerHex}`, text); return true; }catch{} }
+  return false;
+}
+
+let hbTimer=null, tickTimer=null;
+function targets(max=200){
+  const set=new Set();
+  if(isHex64(signallerHex)) set.add(`${signallerPrefix}.${signallerHex}`);
+  for(const a of addrPool.keys()) set.add(a);
+  for(const [pub,ent] of peers.entries()){
+    if(ent.addr) set.add(ent.addr);
+    idSet(pub).forEach(id=>set.add(`${id}.${pub}`));
+  }
+  const out=[]; for(const a of set.values()){ if(a!==selfAddr) out.push(a); if(out.length>=max) break; } return out;
+}
+function probeAll(){
+  if(!client||!client.addr||!selfPub) return;
+  const list=targets(); const t0=now();
+  for(const to of list){
+    const id=`hb|${selfPub}|${t0}|${to}`;
+    const m=addrPool.get(to)||{}; m.lastProbe=t0; addrPool.set(to,m);
+    rawSend(to, JSON.stringify({ver:1,type:'hb',id,from:selfPub,t_client:t0,caps:{relay:true,roster:true}})).catch(()=>{});
+    rawSend(to, JSON.stringify({ver:1,type:'peers_req',id:`peers_req|${selfPub}|${t0}`,from:selfPub,ts:t0})).catch(()=>{});
+  }
+}
+function scheduleHB(){ if(hbTimer) clearInterval(hbTimer); hbTimer=setInterval(probeAll, 12000); }
+function scheduleTicks(){ if(tickTimer) clearInterval(tickTimer); tickTimer=setInterval(()=>{
+  const t=now(); for(const [addr,m] of addrPool.entries()){ if((t - Math.max(m.lastSeen||0,m.lastAck||0))<60000){ rawSend(addr, JSON.stringify({ver:1,type:'tick',id:`tick|${selfPub}|${t}|${addr}`,from:selfPub,ts:t})).catch(()=>{}); } }
+}, 5000);}
+
+/* ============ local camera + global encoder ============ */
+const localVideo=$('#localVideo'), fpsSlider=$('#fpsSlider'), sSlider=$('#sSlider'), fmtQ=$('#fmtQ'), kbSlider=$('#kbSlider');
+const fpsLbl=$('#fpsLbl'), kbLbl=$('#kbLbl');
+fpsSlider.addEventListener('input',()=>fpsLbl.textContent=fpsSlider.value);
+kbSlider.addEventListener('input',()=>kbLbl.textContent=kbSlider.value);
+
+const mFps=$('#mFps'), mSize=$('#mSize'), mSent=$('#mSent'), mDrop=$('#mDrop');
+let srcFpsCount=0, totalSent=0, totalDropped=0, sizeEMA=null;
+setInterval(()=>{ mFps.textContent=String(srcFpsCount); srcFpsCount=0; mSize.textContent = sizeEMA? Math.round(sizeEMA/1024)+' KB':'—'; mSent.textContent=String(totalSent); mDrop.textContent=String(totalDropped); },1000);
+
+async function ensureCamStream(){
+  if(localVideo.srcObject) return localVideo.srcObject;
+  const stream = await navigator.mediaDevices.getUserMedia({ video:{width:{ideal:640},height:{ideal:480},frameRate:{ideal:30,max:30}}, audio:false });
+  localVideo.srcObject=stream; localVideo.muted=true; localVideo.playsInline=true; try{ await localVideo.play(); }catch{}
+  startGlobalEncoder(); // kick once camera is live
+  return stream;
+}
+
+let encCanvas=null, encCtx=null, encRAF=null, lastEncAt=0, latestEncoded=null;
+function startGlobalEncoder(){
+  if(encRAF) return;
+  encCanvas=document.createElement('canvas');
+  encCtx=encCanvas.getContext('2d',{alpha:false,desynchronized:true});
+
+  const step=async (t)=>{
+    const targetMs = 1000 / parseInt(fpsSlider.value||'15',10);
+    if((t-lastEncAt) >= targetMs && localVideo.videoWidth>0){
+      lastEncAt = t;
+      const scale = parseFloat(sSlider.value||'0.7');
+      const w = Math.max(2, Math.round(localVideo.videoWidth * scale));
+      const h = Math.max(2, Math.round(localVideo.videoHeight * scale));
+      if(encCanvas.width!==w||encCanvas.height!==h){ encCanvas.width=w; encCanvas.height=h; }
+      encCtx.drawImage(localVideo, 0, 0, w, h);
+
+      // encode (jpeg/webp with cap)
+      const [fmt,qStr]=(fmtQ.value||'jpeg:0.6').split(':'); const q=parseFloat(qStr||'0.6');
+      let blob = await new Promise(res=>encCanvas.toBlob(res, fmt==='webp'?'image/webp':'image/jpeg', q));
+      const targetKB = parseInt(kbSlider.value||'420',10);
+      // one quick cap pass if needed
+      if(blob && blob.size > targetKB*1024 && q>0.4){
+        blob = await new Promise(res=>encCanvas.toBlob(res, fmt==='webp'?'image/webp':'image/jpeg', Math.max(0.4, q-0.1)));
       }
-      // as last resort try primary signaller
-      if(isHex64(signallerHex)){ try{ await sendRaw(`${signallerPrefix}.${signallerHex}`, text); return true; }catch{} }
-      return false;
-    }
-
-    // presence & rosters (less chatty)
-    function onlineCount(){let n=0,t=now(); for(const [,m] of addrPool.entries()) if((t-(m.lastAck||0))<15000) n++; return n;}
-    function updateSigMeta(){
-      let best=null,bRtt=Infinity,bSeen=0;
-      for(const [addr,m] of addrPool.entries()){ const r=m.rttMs==null?Infinity:m.rttMs; const s=m.lastAck||0; if(r<bRtt||(r===bRtt&&s>bSeen)){best=addr; bRtt=r; bSeen=s;} }
-      const live=onlineCount(), total=addrPool.size;
-      if(!best){ setSig('Mesh: discovering…','warn'); setSigMeta(`targets: ${total} • online: ${live} • latency: —`); }
-      else { const lastSeenStr=bSeen?`${fmtAgo(now()-bSeen)} ago`:'—'; const rtt=(bRtt===Infinity)?'—':`${Math.round(bRtt)} ms`; setSig(`Mesh: ${shortHex(best,7,6)} • ${live}/${total} online`,'ok'); setSigMeta(`last seen: ${lastSeenStr} • latency: ${rtt}`); }
-    }
-
-    let hbTimer=null, tickTimer=null; const outstanding=new Map(); // id -> {addr,t0}
-    function probeAll(){
-      if(!client||!client.addr||!selfPub) return;
-      const list=targets();
-      const t0=now();
-      for(const to of list){
-        const id=`hb|${selfPub}|${t0}|${to}`;
-        outstanding.set(id,{addr:to,t0});
-        const m=addrPool.get(to)||{}; m.lastProbe=t0; addrPool.set(to,m);
-        sendRaw(to, JSON.stringify({ver:1,type:'hb',id,from:selfPub,t_client:t0,caps:{relay:true,roster:true}})).catch(()=>{});
-        sendRaw(to, JSON.stringify({ver:1,type:'peers_req',id:`peers_req|${selfPub}|${t0}`,from:selfPub,ts:t0})).catch(()=>{});
+      if(blob){
+        const u8 = new Uint8Array(await blob.arrayBuffer());
+        sizeEMA = sizeEMA==null ? u8.byteLength : (0.8*sizeEMA + 0.2*u8.byteLength);
+        latestEncoded = { fmt: (fmt==='webp'?'webp':'jpeg'), w, h, ts:now(), b64: u8ToBase64(u8), bytes:u8.byteLength };
+        srcFpsCount++;
+        // broadcast newest to all active peers
+        for(const [pub,st] of streamsOut.entries()){ sendLatestToPeer(pub); }
       }
     }
-    function scheduleHB(){ if(hbTimer) clearInterval(hbTimer); hbTimer=setInterval(probeAll, 12000); } // was 5s
-    function scheduleTicks(){ if(tickTimer) clearInterval(tickTimer); tickTimer=setInterval(()=>{
-      const t=now(); for(const [addr,m] of addrPool.entries()){ if((t-(m.lastAck||0))<12000){ const id=`tick|${selfPub}|${t}|${addr}`; sendRaw(addr, JSON.stringify({ver:1,type:'tick',id,from:selfPub,ts:t})).catch(()=>{}); } }
-    }, 5000);} // was 2.5s
-    setInterval(()=>{ const t=now(); for(const [id,rec] of [...outstanding.entries()]){ if(t-rec.t0>10000){ outstanding.delete(id); poolNoteTimeout(rec.addr); } } }, 1000);
+    encRAF = requestAnimationFrame(step);
+  };
+  encRAF = requestAnimationFrame(step);
+}
 
-    function buildRoster(){ const items=[]; for(const [pub,ent] of peers.entries()){ const ids=[...idSet(pub)]; items.push({ pub, ids, addr: ent.addr || (ids[0]?`${ids[0]}.${pub}`:`web.${pub}`), last: ent.lastTs||0, vestigial: !!ent.isVestigial }); } return { ver:1, type:'peers', id:`peers|${selfPub}|${now()}`, ts:now(), items }; }
-    setInterval(()=>{ try{ const msg=JSON.stringify(buildRoster()); for(const to of targets()) sendRaw(to,msg).catch(()=>{}); persistPeerbook(); }catch{} }, 20000); // was 12s
-    setInterval(()=>{const t=now(); for(const [pub,ent] of peers.entries()){ if((t-(ent.lastTs||0))>90000){ ent.isVestigial=true; } } renderPeerList(); }, 10000);
+/* ============ per-peer TX state (latest-only) ============ */
+const streamsOut=new Map(); // pub -> {inFlight:boolean, pending:boolean, sent:number, sizeEMA:number, ack:{winSent,winAck,lastAckAt,e2eEma}, fpsTick,txCountSec,txFps}
+function startStreamingTo(pub){
+  if(streamsOut.has(pub)) return;
+  streamsOut.set(pub,{inFlight:false,pending:false,sent:0,sizeEMA:null,ack:{winSent:0,winAck:0,lastAckAt:0,e2eEma:null},fpsTick:now(),txCountSec:0,txFps:0});
+  // offer (for UX)
+  sendToBest(pub, JSON.stringify({ver:1,type:'video_offer',id:`vof|${selfPub}|${now()}`,from:selfPub,to:pub,ts:now()})).catch(()=>{});
+  sendLatestToPeer(pub); updatePeerUI(pub);
+}
+function stopStreamingTo(pub){ streamsOut.delete(pub); updatePeerUI(pub); }
+async function sendLatestToPeer(pub){
+  const st=streamsOut.get(pub); if(!st || !latestEncoded) return;
+  if(st.inFlight){ st.pending = true; return; }
+  st.inFlight = true; st.pending=false;
+  const f=latestEncoded;
+  const payload = JSON.stringify({ ver:1, type:'video_frame', id:`vf|${selfPub}|${f.ts}`, from:selfPub, to:pub, ts:f.ts, seq:f.ts, // seq==ts ok
+    w:f.w, h:f.h, fmt:f.fmt, b64:f.b64 });
+  const ok = await sendToBest(pub, payload).catch(()=>false);
+  st.inFlight = false;
+  if(ok){
+    st.sent++; st.ack.winSent++; totalSent++;
+    st.sizeEMA = st.sizeEMA==null? f.bytes : 0.85*st.sizeEMA + 0.15*f.bytes;
+    st.txCountSec++; const t=now(); if(t - st.fpsTick >= 1000){ st.txFps = st.txCountSec; st.txCountSec=0; st.fpsTick=t; }
+  } else {
+    totalDropped++;
+  }
+  if(st.pending) sendLatestToPeer(pub);
+  updatePeerUI(pub);
+}
 
-    // ───────────── video capture/encode (single pipeline) + per-peer senders
-    const localPrev=$('#localPrev'); const mFps=$('#mFps'), mSize=$('#mSize'), mSent=$('#mSent'), mDrop=$('#mDrop');
-    const fpsSlider=$('#fpsSlider'), sSlider=$('#sSlider'), qSlider=$('#qSlider'), kbSlider=$('#kbSlider'), bwChk=$('#bwChk'); const fpsLbl=$('#fpsLbl');
-    fpsSlider.addEventListener('input', ()=> fpsLbl.textContent=fpsSlider.value);
+/* ============ RX sinks (stable canvas per peer) + ACK ============ */
+const incomingSinks=new Map(); // pub -> {holder,canvas,ctx,w,h}
+function ensureSink(pub){
+  let s=incomingSinks.get(pub);
+  const row = document.querySelector(`.peer[data-pub="${pub}"]`);
+  if(!row) return null;
+  let holder = row.querySelector('.preview');
+  if(!holder){ holder=document.createElement('div'); holder.className='preview'; row.insertBefore(holder, row.children[1]||null); }
+  if(s && s.canvas && s.canvas.isConnected){ if(s.holder!==holder){ holder.replaceChildren(s.canvas); s.holder=holder; } return s; }
+  const c=document.createElement('canvas'); c.width=320; c.height=240; const ctx=c.getContext('2d',{alpha:false});
+  holder.replaceChildren(c);
+  s={holder,canvas:c,ctx,w:320,h:240}; incomingSinks.set(pub,s); return s;
+}
+function setAspect(holder,w,h){
+  if(holder && 'aspectRatio' in holder.style) holder.style.aspectRatio=`${w} / ${h}`;
+  else if(holder){ const cw=holder.clientWidth||160; holder.style.height=Math.round(cw*h/w)+'px'; }
+}
+async function decodeBitmap(fmt,b64){
+  const mime=(fmt==='webp')?'image/webp':'image/jpeg';
+  const blob=b64ToBlob(b64,mime);
+  if('createImageBitmap' in window){ try{ return await createImageBitmap(blob); }catch{} }
+  const url=URL.createObjectURL(blob);
+  try{ const img=new Image(); img.src=url; await img.decode(); return { _img:img, width:img.naturalWidth, height:img.naturalHeight }; }
+  finally{ URL.revokeObjectURL(url); }
+}
 
-    let localStream=null, vCanvas=null, vCtx=null;
-    let lastEncodeAt=0, srcFpsCount=0, sizeEMA=null, totalSent=0, totalDropped=0;
-    setInterval(()=>{ mFps.textContent=String(srcFpsCount); srcFpsCount=0; mSize.textContent = sizeEMA? Math.round(sizeEMA/1024)+' KB':'—'; mSent.textContent=String(totalSent); mDrop.textContent=String(totalDropped); }, 1000);
+const rxState=new Map(); // pub -> {decoding:false,queued:null,lastAckSent:0,lastSeenSeq:0,rxFps:0,rxTick:now(),rxCount:0}
+async function processQueue(pub){
+  const st=rxState.get(pub)||{decoding:false,queued:null,lastAckSent:0,lastSeenSeq:0,rxFps:0,rxTick:now(),rxCount:0};
+  if(st.decoding||!st.queued) return;
+  st.decoding=true; rxState.set(pub,st);
+  const job=st.queued; st.queued=null;
+  try{
+    const bmp=await decodeBitmap(job.fmt, job.b64);
+    const w=job.w||bmp.width, h=job.h||bmp.height;
+    const sink=ensureSink(pub); if(!sink){ st.decoding=false; rxState.set(pub,st); return; }
+    setAspect(sink.holder,w,h);
+    if(sink.canvas.width!==w||sink.canvas.height!==h){ sink.canvas.width=w; sink.canvas.height=h; }
+    if(bmp._img) sink.ctx.drawImage(bmp._img,0,0,w,h); else { sink.ctx.drawImage(bmp,0,0,w,h); bmp.close?.(); }
+    st.rxCount++; const t=now(); if(t - st.rxTick >= 1000){ st.rxFps = st.rxCount; st.rxCount=0; st.rxTick=t; }
+  }catch{} finally{
+    st.decoding=false; rxState.set(pub,st);
+    if(st.queued) processQueue(pub);
+  }
+  // coalesced ACK by time/seq
+  st.lastSeenSeq = Math.max(st.lastSeenSeq, job.seq|0);
+  const nowMs=now();
+  if(nowMs - (st.lastAckSent||0) > 220){
+    st.lastAckSent = nowMs;
+    sendToBest(pub, JSON.stringify({ver:1,type:'video_ack',id:`vack|${selfPub}|${st.lastSeenSeq}`,from:selfPub,to:pub,ts:nowMs,ackSeq:st.lastSeenSeq})).catch(()=>{});
+  }
+  updatePeerUI(pub);
+}
+function onRemoteFrame(msg){
+  const pub = msg.from.toLowerCase();
+  ensurePeer(pub,{ts:now(),vestigial:false,addr:bestAddrForPub(pub)||`web.${pub}`});
+  let st=rxState.get(pub); if(!st){ st={decoding:false,queued:null,lastAckSent:0,lastSeenSeq:0,rxFps:0,rxTick:now(),rxCount:0}; rxState.set(pub,st); }
+  st.queued = {fmt:msg.fmt, b64:msg.b64, w:msg.w|0, h:msg.h|0, ts:msg.ts|0, seq: (msg.seq|0)||0};
+  processQueue(pub);
+}
 
-    async function ensureLocalVideo(){
-      if(localStream && vCanvas && vCtx) return true;
-      try{
-        localStream = await navigator.mediaDevices.getUserMedia({ video:{ width:{ideal:640}, height:{ideal:480}, frameRate:{ideal:30,max:30} }, audio:false });
-      }catch(e){ alert('Camera access denied'); return false; }
-      localPrev.srcObject = localStream; localPrev.muted = true; localPrev.playsInline = true; await localPrev.play().catch(()=>{});
-      vCanvas=document.createElement('canvas'); vCanvas.width=640; vCanvas.height=480;
-      vCtx=vCanvas.getContext('2d', { alpha:false, desynchronized:true, willReadFrequently:false });
-      startCaptureLoop();
-      return true;
-    }
+/* ============ Peer list (stable rows) ============ */
+const peerList=$('#peerList');
+function ensurePeerRow(pub){
+  let row=document.querySelector(`.peer[data-pub="${pub}"]`);
+  if(row) return row;
+  row=document.createElement('div'); row.className='peer'; row.dataset.pub=pub;
 
-    let latestFrame=null; // {b64,w,h,bytes,ts}
-    let encoding=false;
-    function encodeOnce(){
-      // scale
-      const scale=parseFloat(sSlider.value||'0.7'); const w=Math.round(640*scale), h=Math.round(480*scale);
-      if(vCanvas.width!==w||vCanvas.height!==h){ vCanvas.width=w; vCanvas.height=h; }
-      vCtx.save(); vCtx.imageSmoothingEnabled=true; vCtx.imageSmoothingQuality='low'; vCtx.filter=bwChk.checked?'grayscale(1)':'none';
-      vCtx.drawImage(localPrev,0,0,w,h); vCtx.restore();
-      const targetKB=parseInt(kbSlider.value||'400',10);
-      let q=parseFloat(qSlider.value||'0.55');
-      let dataUrl=vCanvas.toDataURL('image/jpeg', q);
-      const hdr='data:image/jpeg;base64,'; const byteLen=(s)=>Math.ceil((s.length-hdr.length)*3/4);
-      // quick step-down if above target (1-2 iterations)
-      for(let i=0;i<2 && byteLen(dataUrl)>targetKB*1024 && q>0.25;i++){ q=Math.max(0.25,q-0.1); dataUrl=vCanvas.toDataURL('image/jpeg', q); }
-      const bytes=byteLen(dataUrl);
-      sizeEMA = sizeEMA==null ? bytes : (0.8*sizeEMA + 0.2*bytes);
-      latestFrame = { b64: dataUrl.slice(hdr.length), w, h, bytes, ts: now() };
-      srcFpsCount++;
-    }
+  const dot=document.createElement('span'); dot.className='dot warn';
+  const preview=document.createElement('div'); preview.className='preview';
 
-    function startCaptureLoop(){
-      const step = (t)=>{
-        const target = 1000 / parseInt(fpsSlider.value||'12',10);
-        if(!encoding && (t - lastEncodeAt) >= target){
-          encoding = true;
-          encodeOnce();
-          lastEncodeAt = t;
-          encoding = false;
+  const grow=document.createElement('div');
+  const name=document.createElement('div'); name.className='name'; name.textContent=shortHex(pub,8,6);
+  const meta=document.createElement('div'); meta.className='tiny meta'; meta.textContent='—';
+  grow.appendChild(name); grow.appendChild(meta);
+
+  const btns=document.createElement('div'); btns.className='btns';
+  const bVid=document.createElement('button'); bVid.textContent=(streamsOut.has(pub)?'Stream ■':'Stream ▶');
+  bVid.onclick=async (e)=>{
+    e.stopPropagation(); await ensureCamStream();
+    if(!streamsOut.has(pub)){ startStreamingTo(pub); bVid.textContent='Stream ■'; }
+    else { stopStreamingTo(pub); bVid.textContent='Stream ▶'; }
+    updatePeerUI(pub);
+  };
+  btns.appendChild(bVid);
+
+  row.appendChild(dot); row.appendChild(preview); row.appendChild(grow); row.appendChild(btns);
+  peerList.appendChild(row);
+
+  return row;
+}
+function peerMetaText(pub){ const ent=peers.get(pub)||{}; const ago=ent.lastTs? fmtAgo(now()-ent.lastTs)+' ago':'—'; return ent.isVestigial? `last seen ${ago}` : `active • ${ago}`; }
+function updatePeerUI(pub){
+  const row=document.querySelector(`.peer[data-pub="${pub}"]`); if(!row) return;
+  row.querySelector('.name').textContent = shortHex(pub,8,6);
+  const meta=row.querySelector('.tiny.meta');
+  const dot=row.querySelector('.dot');
+
+  // metrics
+  const st=streamsOut.get(pub)||null;
+  const rx=rxState.get(pub)||null;
+  const txFps = st? (st.txFps||0) : 0;
+  const rxFps = rx? (rx.rxFps||0) : 0;
+  const avgKB = st?.sizeEMA!=null ? Math.round(st.sizeEMA/1024) : 0;
+  const ackPct = st && st.ack ? (st.ack.winSent? Math.round((st.ack.winAck/st.ack.winSent)*100) : 0) : 0;
+
+  if(meta) meta.textContent = `${peerMetaText(pub)} • tx ${txFps}fps • rx ${rxFps}fps • ~${avgKB}KB • ack ${ackPct}%`;
+  if(dot) dot.className='dot '+( isPeerOnline(pub)?'ok':(peers.get(pub)?.isVestigial?'err':'warn') );
+}
+setInterval(()=>{ for(const [pub] of peers.entries()) updatePeerUI(pub); }, 1500);
+
+/* ============ NKN wiring ============ */
+const seenIds=new Map(); setInterval(()=>{const cut=now()-120000; for(const [id,ts] of seenIds.entries()) if(ts<cut) seenIds.delete(id);},15000);
+function markSeen(msg){const id=(msg&&typeof msg.id==='string')?msg.id:`${msg?.type||'?'}|${msg?.from||'?'}|${msg?.ts||0}`; const t=now(); const prev=seenIds.get(id); if(prev&&(t-prev)<60000) return true; seenIds.set(id,t); return false;}
+
+async function connectNkn(){
+  try{
+    setNkn('NKN: connecting…','warn');
+    const seed=getOrCreateSeed();
+    client=new window.nkn.MultiClient({ seed, identifier:'web', numSubClients:8, originalClient:true });
+
+    client.onConnect(()=>{ 
+      selfAddr=client.addr||null; selfPub=client.getPublicKey()||null; 
+      $('#myAddr').textContent=selfAddr||'—'; $('#myPub').textContent=selfPub||'—'; 
+      setNkn('NKN: connected','ok'); scheduleHB(); scheduleTicks(); probeAll();
+      // ask roster immediately
+      for(const to of targets()) rawSend(to, JSON.stringify({ver:1,type:'peers_req',id:`peers_req|${selfPub}|${now()}`,from:selfPub,ts:now()})).catch(()=>{});
+      ensureCamStream().catch(()=>{});
+    });
+
+    client.onMessage(async ({src,payload})=>{
+      if(src){
+        const m=/^([a-z0-9_-]+)\.([0-9a-f]{64})$/i.exec(src);
+        if(m){ idSet(m[2].toLowerCase()).add(m[1]); persistKnownIds(); poolAdd(src, now()); ensurePeer(m[2].toLowerCase(),{addr:src,ts:now()}); }
+        else { poolAdd(src, now()); }
+      }
+      let text=payload; if(payload instanceof Uint8Array){ try{ text=new TextDecoder().decode(payload); }catch{} }
+      if(typeof text!=='string') return;
+      let msg=null; if(text.trim().startsWith('{')){ try{ msg=JSON.parse(text); }catch{} }
+      const tsNow=now(); if(!msg) return; if(markSeen(msg)) return;
+
+      if(msg.type==='hb'){ rawSend(src, JSON.stringify({ver:1,type:'hb_ack',id:msg.id||`hb_ack|${selfPub}|${tsNow}`,from:selfPub,t_client:msg.t_client})).catch(()=>{}); if(msg.from) ensurePeer(msg.from.toLowerCase(),{ts:tsNow}); return; }
+      if(msg.type==='hb_ack' && typeof msg.t_client==='number'){ const rtt=Math.max(0,tsNow-(msg.t_client||tsNow)); poolNoteAck(src,rtt); if(msg.from){ ensurePeer(msg.from.toLowerCase(),{ts:tsNow}); } return; }
+      if(msg.type==='tick'){ if(msg.from) ensurePeer(msg.from.toLowerCase(),{ts:tsNow}); return; }
+
+      if(msg.type==='peers'){ const arr=Array.isArray(msg.items)?msg.items:[]; for(const it of arr){ const pub=(it.pub||'').toLowerCase(); if(!pub||pub===(selfPub||'').toLowerCase()) continue; const ids=idSet(pub); (Array.isArray(it.ids)?it.ids:[]).forEach(id=>ids.add(id)); ids.forEach(id=>poolAdd(`${id}.${pub}`, tsNow)); const addrGuess = it.addr || (ids.size?`${[...ids][0]}.${pub}`:`web.${pub}`); poolAdd(addrGuess, tsNow); ensurePeer(pub,{addr:addrGuess,ts:typeof it.last==='number'?it.last:tsNow,vestigial:!!it.vestigial}); } persistKnownIds(); return; }
+      if(msg.type==='peers_req'){ const roster={ ver:1, type:'peers', id:`peers|${selfPub}|${now()}`, ts:now(), items:[...peers.entries()].map(([pub,ent])=>({ pub, ids:[...idSet(pub)], addr: ent.addr||`web.${pub}`, last: ent.lastTs||0, vestigial: !!ent.isVestigial })) }; rawSend(src, JSON.stringify(roster)).catch(()=>{}); return; }
+
+      if(msg.type==='join'){ const ack={ver:1,type:'joined',id:`joined|${selfPub}|${tsNow}`,ts:tsNow,addr:selfAddr,prefix:'peer'}; sendToBest(msg.from, JSON.stringify(ack)).catch(()=>{}); const from=msg.from?.toLowerCase(); if(from) ensurePeer(from,{ts:tsNow}); return; }
+      if(msg.type==='joined'){ poolNoteAck(src,null); return; }
+      if(msg.type==='leave' && msg.from){ const from=msg.from.toLowerCase(); const ent=peers.get(from)||{}; ensurePeer(from,{ts:tsNow,vestigial:true,addr:ent.addr||`web.${from}`}); return; }
+
+      // handshake UX
+      if(msg.type==='video_offer' && msg.from && (!msg.to || msg.to===selfPub)){ const ack={ver:1,type:'video_accept',id:`vack|${selfPub}|${tsNow}`,from:selfPub,to:msg.from,ts:tsNow}; sendToBest(msg.from, JSON.stringify(ack)).catch(()=>{}); return; }
+      if(msg.type==='video_accept' && msg.from && msg.to===selfPub) return; 
+
+      // frames in → draw + ack
+      if(msg.type==='video_frame' && msg.from && msg.b64 && (msg.fmt==='jpeg'||msg.fmt==='webp')){
+        onRemoteFrame(msg);
+        return;
+      }
+
+      // ACKs back to sender
+      if(msg.type==='video_ack' && msg.from && msg.to===selfPub){
+        const from=msg.from.toLowerCase();
+        const st=streamsOut.get(from); if(!st) return;
+        const ackSeq=(msg.ackSeq|0)||0;
+        if(ackSeq>0){
+          // approximate: if we used ts as seq, any ACK bumps the window
+          st.ack.winAck++;
+          st.ack.lastAckAt = now();
+          const e2e = now() - ackSeq;
+          st.ack.e2eEma = st.ack.e2eEma==null? e2e : 0.8*st.ack.e2eEma + 0.2*e2e;
+          updatePeerUI(from);
+        }else if(typeof msg.srcTs==='number'){ // back-compat
+          st.ack.winAck++; st.ack.lastAckAt=now(); const e2e=now()-msg.srcTs; st.ack.e2eEma = st.ack.e2eEma==null? e2e : 0.8*st.ack.e2eEma + 0.2*e2e; updatePeerUI(from);
         }
-        requestAnimationFrame(step);
-      };
-      requestAnimationFrame(step);
-    }
-
-    // per-peer pipelines (latest-only, one in-flight)
-    const streamsOut=new Map(); // pub -> {inFlight:boolean, pending:boolean, lastTxAt:number, sent:number, sizeEMA:number}
-    async function pumpPeer(pub){
-      const st = streamsOut.get(pub);
-      if(!st) return;
-      if(st.inFlight) { st.pending = true; return; }
-      if(!latestFrame) return;
-      st.inFlight = true; st.pending = false;
-      const frame = latestFrame; // send newest
-      const payload = JSON.stringify({ ver:1, type:'video_frame', id:`vf|${selfPub}|${frame.ts}`, from:selfPub, to:pub, ts:frame.ts, w:frame.w, h:frame.h, fmt:'jpg', b64:frame.b64 });
-      const ok = await sendToBest(pub, payload).catch(()=>false);
-      st.inFlight = false;
-      if(ok){ st.sent=(st.sent||0)+1; st.lastTxAt=now(); st.sizeEMA = st.sizeEMA==null? frame.bytes : 0.85*st.sizeEMA + 0.15*frame.bytes; totalSent++; updatePeerTxMetrics(pub, st); }
-      else { totalDropped++; }
-      if(st.pending) pumpPeer(pub); // send latest waiting
-    }
-
-    function startStreamingTo(pub){
-      if(streamsOut.has(pub)) return;
-      streamsOut.set(pub, {inFlight:false,pending:false,lastTxAt:0,sent:0,sizeEMA:null});
-      // offer + begin
-      const offer={ver:1,type:'video_offer',id:`vof|${selfPub}|${now()}`,from:selfPub,to:pub,ts:now()};
-      sendToBest(pub, JSON.stringify(offer)).catch(()=>{});
-      // schedule pump tied to RAF cadence (low overhead): try after each encode via observer
-      // We’ll also add a timer as safety
-      const timer = setInterval(()=>pumpPeer(pub), 50);
-      streamsOut.get(pub).timer = timer;
-    }
-    function stopStreamingTo(pub){
-      const st=streamsOut.get(pub); if(!st) return;
-      clearInterval(st.timer); streamsOut.delete(pub);
-      updatePeerTxMetrics(pub, null);
-    }
-
-    // per-peer UI metrics
-    function updatePeerTxMetrics(pub, st){
-      const row = document.querySelector(`.peer[data-pub="${pub}"]`);
-      if(!row) return;
-      const meta = row.querySelector('.meta');
-      if(!st){ meta.textContent = peerMetaText(pub); return; }
-      const fps = st.sent ? Math.min(parseInt(fpsSlider.value||'12',10), st.sent) : 0;
-      const kb = st.sizeEMA ? Math.round(st.sizeEMA/1024) : 0;
-      meta.textContent = `${peerMetaText(pub)} • tx ~${fps} fps • ~${kb} KB`;
-    }
-
-    // ───────────── incoming video (canvas + ImageBitmap decode)
-    const incoming=$('#incoming'); const rxThumbs=new Map(); // pub -> {root,canvas,ctx,metaEl,lastTs}
-    function ensureThumb(pub,w=320,h=240){
-      let t = rxThumbs.get(pub);
-      if(!t){
-        const root=document.createElement('div'); root.className='thumb';
-        const header=document.createElement('header');
-        const name=document.createElement('div'); name.className='mono'; name.textContent=shortHex(pub,8,6);
-        const meta=document.createElement('div'); meta.className='tiny'; meta.textContent='—';
-        header.appendChild(name); header.appendChild(meta);
-        const canvas=document.createElement('canvas'); canvas.className='rx'; canvas.width=w; canvas.height=h; const ctx=canvas.getContext('2d',{alpha:false,desynchronized:true});
-        root.appendChild(header); root.appendChild(canvas);
-        incoming.appendChild(root);
-        t={root,canvas,ctx,metaEl:meta,lastTs:0};
-        rxThumbs.set(pub,t);
+        return;
       }
-      return t;
-    }
-    async function drawIncoming(pub, w, h, b64){
-      const t = ensureThumb(pub,w,h); t.lastTs=now(); t.metaEl.textContent = `${w}×${h} • now`;
-      // decode via ImageBitmap for speed
-      try{
-        const blob = await (await fetch(`data:image/jpeg;base64,${b64}`)).blob();
-        const bmp = await createImageBitmap(blob);
-        if(t.canvas.width!==w||t.canvas.height!==h){ t.canvas.width=w; t.canvas.height=h; }
-        t.ctx.drawImage(bmp, 0, 0, w, h);
-        bmp.close && bmp.close();
-      }catch{
-        // fallback: ignore frame
-      }
-    }
-    setInterval(()=>{ const t=now(); for(const [pub,tb] of rxThumbs){ if(t - (tb.lastTs||0) > 30000){ tb.root.remove(); rxThumbs.delete(pub); } } }, 5000);
+    });
 
-    // ───────────── peer list UI
-    const peerList=$('#peerList');
-    function isPeerOnline(pub){ const addrs=addressesForPub(pub); const t=now(); return addrs.some(a => (addrPool.get(a)?.lastAck||0) > t-12000); }
-    function peerMetaText(pub){ const ent=peers.get(pub)||{}; const ago=ent.lastTs? fmtAgo(now()-ent.lastTs)+' ago':'—'; return ent.isVestigial? `last seen ${ago}` : `active • ${ago}`; }
-    function renderPeerList(){
-      peerList.innerHTML='';
-      const rows=[...peers.entries()].sort((a,b)=>(b[1].lastTs||0)-(a[1].lastTs||0));
-      for(const [pub,ent] of rows){
-        const row=document.createElement('div'); row.className='peer'; row.dataset.pub = pub;
-        const dot=document.createElement('span'); dot.className='dot '+(isPeerOnline(pub)?'ok':(ent.isVestigial?'err':'warn'));
-        const grow=document.createElement('div'); grow.className='grow';
-        const name=document.createElement('div'); name.className='name'; name.textContent=shortHex(pub,8,6);
-        const meta=document.createElement('div'); meta.className='tiny meta'; meta.textContent = peerMetaText(pub);
-        grow.appendChild(name); grow.appendChild(meta);
-        const btn=document.createElement('button');
-        const sending=streamsOut.has(pub);
-        btn.textContent=sending?'Stop':'Stream';
-        btn.disabled=!isPeerOnline(pub) && !sending;
-        btn.onclick=async (e)=>{
-          e.stopPropagation();
-          if(!streamsOut.has(pub)){
-            const ok=await ensureLocalVideo(); if(!ok) return;
-            await sendToBest(pub, JSON.stringify({ver:1,type:'video_offer',id:`vof|${selfPub}|${now()}`,from:selfPub,to:pub,ts:now()})).catch(()=>{});
-            startStreamingTo(pub);
-            btn.textContent='Stop';
-          }else{
-            stopStreamingTo(pub); btn.textContent='Stream';
-          }
-        };
-        row.appendChild(dot); row.appendChild(grow); row.appendChild(btn);
-        row.onclick=()=>btn.click();
-        peerList.appendChild(row);
-      }
-    }
+    client.on('error',()=>setNkn('NKN: error','err'));
+    client.on('connectFailed',()=>setNkn('NKN: connect failed (retrying)','warn'));
+    client.on('willreconnect',()=>setNkn('NKN: reconnecting…','warn'));
+    client.on('close',()=>setNkn('NKN: disconnected','err'));
+  }catch{ setNkn('NKN: init failed','err'); }
+}
 
-    // ───────────── NKN wiring
-    async function connectNkn(){
-      try{
-        setNkn('NKN: connecting…','warn');
-        const seed=getOrCreateSeed();
-        client=new window.nkn.MultiClient({ seed, identifier:'web', numSubClients:8, originalClient:true });
-        client.onConnect(()=>{ selfAddr=client.addr||null; selfPub=client.getPublicKey()||null; $('#myAddr').textContent=selfAddr||'—'; $('#myPub').textContent=selfPub||'—'; setNkn('NKN: connected','ok'); scheduleHB(); scheduleTicks(); probeAll(); for(const to of targets()) sendRaw(to, JSON.stringify({ver:1,type:'peers_req',id:`peers_req|${selfPub}|${now()}`,from:selfPub,ts:now()})).catch(()=>{}); });
-        client.onMessage(({src,payload})=>{
-          if(src){ const m=/^([a-z0-9_-]+)\.([0-9a-f]{64})$/i.exec(src); if(m){ idSet(m[2].toLowerCase()).add(m[1]); persistKnownIds(); poolAdd(src, now()); } }
-          let text=payload; if(payload instanceof Uint8Array){ try{ text=new TextDecoder().decode(payload); }catch{} }
-          if(typeof text!=='string') return;
-          let msg=null; if(text.trim().startsWith('{')){ try{ msg=JSON.parse(text); }catch{} }
-          const tsNow=now(); if(!msg) return; if(markSeen(msg)) return;
+/* ============ signaller override + start ============ */
+const hexInput=$('#hexSig'); hexInput.value=localStorage.getItem(LS.SIGHEX)||'';
+function applySignallerHex(raw){ const v=(raw||'').trim().toLowerCase(); signallerHex=isHex64(v)?v:DEFAULT_SIG_HEX; if(isHex64(v)) localStorage.setItem(LS.SIGHEX,v); signallerPrefix='signal'; const primary=`${signallerPrefix}.${signallerHex}`; poolAdd(primary,now()); setSig(`Mesh: prim ${shortHex(primary,7,6)} + peers`,'warn'); setSigMeta('probing…'); probeAll(); }
+hexInput.addEventListener('input',()=>applySignallerHex(hexInput.value)); applySignallerHex(hexInput.value||DEFAULT_SIG_HEX);
 
-          if(msg.type==='hb'){ sendRaw(src, JSON.stringify({ver:1,type:'hb_ack',id:msg.id||`hb_ack|${selfPub}|${tsNow}`,from:selfPub,t_client:msg.t_client})).catch(()=>{}); poolNoteUpdate(src); if(msg.from) ensurePeer(msg.from.toLowerCase(),{ts:tsNow}); return; }
-          if(msg.type==='hb_ack' && typeof msg.t_client==='number'){ const rtt=Math.max(0,tsNow-(msg.t_client||tsNow)); poolNoteAck(src,rtt); if(msg.from) ensurePeer(msg.from.toLowerCase(),{ts:tsNow}); return; }
-          if(msg.type==='tick'){ if(msg.from) ensurePeer(msg.from.toLowerCase(),{ts:tsNow}); return; }
+connectNkn();
+setInterval(()=>{ if(!client||!client.addr||!selfPub) return; const pkt={ver:1,type:'join',id:`join|${selfPub}|${now()}`,from:selfPub,addr:selfAddr,ts:now(),caps:{relay:true,roster:true}}; for(const to of targets()) rawSend(to, JSON.stringify(pkt)).catch(()=>{}); }, 15000);
+addEventListener('beforeunload',()=>{ try{ const pkt={ver:1,type:'leave',id:`leave|${selfPub}|${now()}`,from:selfPub,addr:selfAddr,ts:now()}; for(const to of targets()) rawSend(to, JSON.stringify(pkt)).catch(()=>{}); }catch{} });
 
-          if(msg.type==='peers'){ const arr=Array.isArray(msg.items)?msg.items:[]; for(const it of arr){ const pub=(it.pub||'').toLowerCase(); if(!pub||pub===(selfPub||'').toLowerCase()) continue; const ids=idSet(pub); (Array.isArray(it.ids)?it.ids:[]).forEach(id=>ids.add(id)); ids.forEach(id=>poolAdd(`${id}.${pub}`, tsNow)); const addrGuess = it.addr || (ids.size?`${[...ids][0]}.${pub}`:`web.${pub}`); poolAdd(addrGuess, tsNow); ensurePeer(pub,{addr:addrGuess,ts:typeof it.last==='number'?it.last:tsNow,vestigial:!!it.vestigial}); } persistKnownIds(); persistPeerbook(); return; }
-          if(msg.type==='peers_req'){ const roster=JSON.stringify(buildRoster()); sendRaw(src, roster).catch(()=>{}); return; }
-
-          if(msg.type==='join'){ const ack={ver:1,type:'joined',id:`joined|${selfPub}|${tsNow}`,ts:tsNow,addr:selfAddr,prefix:'peer'}; sendRaw(src, JSON.stringify(ack)).catch(()=>{}); const from=msg.from?.toLowerCase(); if(from) ensurePeer(from,{ts:tsNow}); return; }
-          if(msg.type==='joined'){ poolNoteAck(src,null); return; }
-          if(msg.type==='leave' && msg.from){ const from=msg.from.toLowerCase(); const ent=peers.get(from)||{}; ensurePeer(from,{ts:tsNow,vestigial:true,addr:ent.addr||`web.${from}`}); persistPeerbook(); return; }
-
-          if(msg.type==='video_offer' && msg.from && (!msg.to || msg.to===selfPub)){ const ack={ver:1,type:'video_accept',id:`vack|${selfPub}|${tsNow}`,from:selfPub,to:msg.from,ts:tsNow}; sendToBest(msg.from, JSON.stringify(ack)).catch(()=>{}); return; }
-          if(msg.type==='video_accept' && msg.from && msg.to===selfPub){ ensureLocalVideo().then(ok=>{ if(ok) startStreamingTo(msg.from); }); return; }
-          if(msg.type==='video_frame' && msg.from && msg.b64 && msg.w && msg.h){ drawIncoming(msg.from.toLowerCase(), msg.w, msg.h, msg.b64); const from=msg.from.toLowerCase(); ensurePeer(from,{ts:now()}); return; }
-        });
-
-        client.on('error',()=>setNkn('NKN: error','err'));
-        client.on('connectFailed',()=>setNkn('NKN: connect failed (retrying)','warn'));
-        client.on('willreconnect',()=>setNkn('NKN: reconnecting…','warn'));
-        client.on('close',()=>setNkn('NKN: disconnected','err'));
-      }catch{ setNkn('NKN: init failed','err'); }
-    }
-
-    // signaller override
-    const hexInput=$('#hexSig'); hexInput.value=localStorage.getItem(LS.SIGHEX)||'';
-    function applySignallerHex(raw){ const v=(raw||'').trim().toLowerCase(); signallerHex=isHex64(v)?v:DEFAULT_SIG_HEX; if(isHex64(v)) localStorage.setItem(LS.SIGHEX,v); signallerPrefix='signal'; const primary=`${signallerPrefix}.${signallerHex}`; poolAdd(primary,now()); setSig(`Mesh: prim ${shortHex(primary,7,6)} + peers`,'warn'); setSigMeta('probing…'); probeAll(); }
-    hexInput.addEventListener('input',()=>applySignallerHex(hexInput.value)); applySignallerHex(hexInput.value||DEFAULT_SIG_HEX);
-
-    // start
-    connectNkn();
-
-    // periodic membership (less frequent)
-    setInterval(()=>{ if(!client||!client.addr||!selfPub) return; const pkt={ver:1,type:'join',id:`join|${selfPub}|${now()}`,from:selfPub,addr:selfAddr,ts:now(),caps:{relay:true,roster:true}}; for(const to of targets()) sendRaw(to, JSON.stringify(pkt)).catch(()=>{}); }, 15000);
-
-    // unload
-    addEventListener('beforeunload',()=>{ try{ const pkt={ver:1,type:'leave',id:`leave|${selfPub}|${now()}`,from:selfPub,addr:selfAddr,ts:now()}; for(const to of targets()) sendRaw(to, JSON.stringify(pkt)).catch(()=>{}); }catch{} });
-  </script>
+ensureCamStream().catch(()=>{});
+</script>
 </body>
 </html>
