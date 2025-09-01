@@ -353,7 +353,7 @@
             background: transparent;
             height: max-content;
             backdrop-filter: blur(50px) brightness(2);
-            margin-bottom: 4px;
+            margin-bottom: 12px;
 
         }
 
@@ -431,7 +431,6 @@
             height: 100%;
             object-fit: cover;
             overflow: hidden;
-            border-radius: 1rem;
         }
 
         .overlay {
@@ -1683,9 +1682,10 @@
             avTog.appendChild(btnMic);
             avTog.appendChild(btnCam);
             avTog.appendChild(btnShare);
+            row.appendChild(avTog);
 
             overlayBottom.appendChild(meta);
-            overlayBottom.appendChild(avTog);
+            //overlayBottom.appendChild(avTog);
 
             frame.appendChild(overlayTop);
             frame.appendChild(preview);
@@ -1695,6 +1695,7 @@
 
             // Add to grid
             tile.appendChild(frame);
+            tile.appendChild(row);
             grid.appendChild(tile);
 
             measurePub(pub);
