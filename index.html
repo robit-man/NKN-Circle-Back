@@ -37,6 +37,7 @@
             font-family: "Rajdhani", sans-serif;
             touch-action: manipulation;
             user-select: none;
+            overflow-x: hidden;
         }
 
         /* Header */
@@ -238,6 +239,87 @@
             width: 100%
         }
 
+        /* ——— Username modal ——— */
+        .modal-backdrop {
+            position: fixed;
+            inset: 0;
+            display: none;
+            /* toggled by .open */
+            place-items: center;
+            z-index: 9999;
+            background: rgba(0, 0, 0, .45);
+            backdrop-filter: blur(16px) saturate(1.15);
+        }
+
+        .modal-backdrop.open {
+            display: grid;
+        }
+
+        .modal-card {
+            width: min(92vw, 520px);
+            border: 1px solid #1d1d1d;
+            border-radius: 16px;
+            background: #0f1011;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, .45);
+            padding: 18px;
+        }
+
+        .modal-card h2 {
+            margin: 0 0 8px;
+            font-size: 20px;
+        }
+
+        .modal-card p {
+            margin: 0 0 12px;
+            color: var(--muted);
+        }
+
+        .modal-row {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .modal-row input {
+            flex: 1;
+            height: 40px;
+            border-radius: 10px;
+            border: 1px solid #242424;
+            background: #000;
+            color: var(--fg);
+            padding: 0 12px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        }
+
+        .modal-row button {
+            height: 40px;
+            padding: 0 14px;
+            border-radius: 10px;
+            border: 1px solid #2a2a2a;
+            cursor: pointer;
+            background: var(--fg);
+            color: #000;
+            font-weight: 600;
+        }
+
+        .modal-row button.secondary {
+            background: #0a0a0a;
+            color: #fff;
+        }
+
+        .modal-help {
+            font-size: 12px;
+            color: var(--muted);
+            margin-top: 6px;
+        }
+
+        .modal-err {
+            font-size: 12px;
+            color: var(--err);
+            margin-top: 6px;
+            min-height: 1em;
+        }
+
 
         #localVideo {
 
@@ -248,7 +330,7 @@
             position: fixed;
             top: 0px;
             z-index: 0;
-            filter: contrast(1) blur(20px) saturate(10) brightness(2) opacity(0.8) blur(500px) brightness(0.2);
+            filter: contrast(0.2) blur(300px) saturate(20) brightness(1.5) opacity(0.2) blur(500px) brightness(0.5);
             scale: 1.5;
         }
 
@@ -655,6 +737,12 @@
 
     <script>
         /* ====== helpers ====== */
+        const onReady = (fn) => (
+            document.readyState === 'loading'
+                ? document.addEventListener('DOMContentLoaded', fn, { once: true })
+                : fn()
+        );
+
         const $ = s => document.querySelector(s);
         const shortHex = (s, a = 8, b = 6) => s ? (s.slice(0, a) + '…' + s.slice(-b)) : '—';
         const isHex64 = s => /^[0-9a-f]{64}$/i.test((s || '').trim());
@@ -2382,11 +2470,93 @@
         setInterval(periodicJoin, 15000);
         addEventListener('beforeunload', () => { try { const pkt = { ver: 1, type: 'leave', id: `leave|${selfPub}|${now()}`, from: selfPub, addr: selfAddr, ts: now() }; for (const to of targets()) rawSend(to, JSON.stringify(pkt)).catch(() => { }); } catch { } });
 
-        /* ====== boot ====== */
-        connectNkn();
-        ensureCamStream().catch(() => { });
-        scheduleHB(); scheduleTicks();
-        updateSelfTileLabels();
+        /* ====== boot (gated on username) ====== */
+        function randomNick() {
+            const A = ['neo', 'quant', 'nova', 'zen', 'ember', 'orbit', 'pixel', 'lyra', 'atlas', 'rune', 'vanta', 'lumen'];
+            const B = ['otter', 'lynx', 'sparrow', 'badger', 'gecko', 'orca', 'tiger', 'eagle', 'whale', 'manta', 'ibis', 'fox'];
+            const pick = (arr) => arr[(Math.random() * arr.length) | 0];
+            return sanitizeNick(`${pick(A)}-${pick(B)}-${(Math.random() * 99 | 0)}`);
+        }
+
+        function showNickModal() {
+            const modal = document.getElementById('nickModal');
+            const input = document.getElementById('nickModalInput');
+            const useBtn = document.getElementById('nickModalUse');
+            const suggBtn = document.getElementById('nickModalSuggest');
+            const skipBtn = document.getElementById('nickModalSkip');
+            const errEl = document.getElementById('nickModalErr');
+
+            if (!modal || !input || !useBtn || !suggBtn || !skipBtn || !errEl) {
+                // Wait for the DOM, then try again — do NOT connect yet
+                onReady(showNickModal);
+                return;
+            }
+
+            const setError = (t) => { errEl.textContent = t || ''; };
+
+            const suggestion = randomNick();
+            input.value = suggestion;
+
+            function applyNick(nickRaw) {
+                const nick = sanitizeNick(nickRaw || '');
+                if (nick.length < 2) { setError('Please enter at least 2 valid characters.'); return; }
+                if (RESERVED_IDS.has(nick)) { setError(`'${nick}' is reserved — pick another.`); return; }
+
+                // persist + apply
+                localStorage.setItem(LS.NICK, nick);
+                MY_NICK = nick;
+                const newIdent = nick; // already sanitized
+                if (newIdent !== MY_IDENT) {
+                    MY_IDENT = newIdent;
+                    updateSelfTileLabels();
+                    const sidebarInput = document.getElementById('nickInput');
+                    if (sidebarInput) sidebarInput.value = nick;
+
+                    try { client && client.close(); } catch { }
+                    client = null; selfAddr = null; selfPub = null; SEND_GUARD = true;
+                }
+
+                // hide modal + connect
+                modal.classList.remove('open');
+                connectNkn();
+                ensureCamStream().catch(() => { });
+                scheduleHB(); scheduleTicks();
+            }
+
+            useBtn.onclick = () => applyNick(input.value);
+            suggBtn.onclick = () => { input.value = randomNick(); setError(''); input.focus(); };
+            skipBtn.onclick = () => {
+                // Allow "web" only as temporary (we still connect)
+                modal.classList.remove('open');
+                connectNkn();
+                ensureCamStream().catch(() => { });
+                scheduleHB(); scheduleTicks();
+            };
+            input.onkeydown = (e) => { if (e.key === 'Enter') useBtn.click(); };
+
+            modal.classList.add('open');
+            setTimeout(() => input.focus(), 0);
+        }
+
+        function bootAfterNick() {
+            // If a valid, non-reserved nick exists, use it. Otherwise prompt.
+            const saved = (localStorage.getItem(LS.NICK) || '').trim();
+            const sn = sanitizeNick(saved);
+            if (sn && !RESERVED_IDS.has(sn)) {
+                MY_NICK = sn;
+                MY_IDENT = sn;
+                connectNkn();
+                ensureCamStream().catch(() => { });
+                scheduleHB(); scheduleTicks();
+                updateSelfTileLabels();
+            } else {
+                // Defer connection until user chooses a nick (no silent 'web')
+                showNickModal();
+            }
+        }
+
+        bootAfterNick();
+        onReady(bootAfterNick);
 
         /* ====== optional: self tile for visual consistency ====== */
         // You can comment this out if you don't want a self tile.
@@ -2425,6 +2595,30 @@
         })();
 
     </script>
+    <!-- Username Modal -->
+    <div id="nickModal" class="modal-backdrop" aria-modal="true" role="dialog">
+        <div class="modal-card">
+            <h2>Choose your username</h2>
+            <p>This name is used as your NKN identifier (so peers see this instead of your hex).</p>
+
+            <div class="modal-row">
+                <input id="nickModalInput" maxlength="24" placeholder="letters, numbers, _ or - only"
+                    spellcheck="false" />
+                <button id="nickModalUse" type="button">Use</button>
+            </div>
+            <div class="modal-row" style="margin-top:8px">
+                <button id="nickModalSuggest" class="secondary" type="button">Suggest</button>
+                <button id="nickModalSkip" class="secondary" type="button"
+                    title="Use temporary 'web' (not recommended)">Skip</button>
+            </div>
+
+            <div id="nickModalErr" class="modal-err"></div>
+            <div class="modal-help">Allowed: <code>a–z 0–9 _ -</code>, 2–24 chars. Reserved: <code>peer</code>,
+                <code>web</code>, <code>signal</code>.
+            </div>
+        </div>
+    </div>
+
 </body>
 
 </html>
