@@ -17,6 +17,14 @@ ENV (optional):
   PEER_HARD_TTL_MS  — 21600000 (6h) → prune old vestigial
   ROSTER_PUSH_MS    — 15000 (15s) roster cadence
   PEERS_PATH        — path for peers.json (default ./sidecar_node/peers.json)
+
+# New rate/throughput tuning:
+  SEND_BURST               — tokens per peer (default 10)
+  SEND_REFILL_PER_SEC      — token refill per peer per second (default 20)
+  SEND_MAX_INFLIGHT        — max concurrent sends per peer (default 64)
+  SEND_MAX_QUEUE           — max enqueued frames per peer (default 10000)
+  SEND_MIN_RETRY_MS        — min backoff on error (default 200)
+  SEND_MAX_RETRY_MS        — max backoff on error (default 10000)
 """
 
 import os, sys, time, signal, threading, subprocess, shutil, secrets
@@ -39,14 +47,15 @@ def ensure_node():
         sys.exit(1)
 
 SIGNALLER_JS = dedent(r"""
-// signaller.js — NKN MultiClient rebroadcaster + durable roster
-// • Node flavor: use client.on('connect')
-// • Persists peers.json (0600) and loads on boot
-// • Roster: {type:'peers', ts, items:[{pub,last,vestigial,lat?,lon?}]}
-// • Flap-storm detector: exit so wrapper restarts
+// signaller.js — NKN MultiClient rebroadcaster + durable roster + rate-aware outbox
+// - Persists peers.json (0600) and loads on boot
+// - Roster: {type:'peers', ts, items:[{pub,last,vestigial,lat?,lon?}]}
+// - Flap-storm detector: exit so wrapper restarts
+// - Per-peer token bucket + in-flight limits
+// - 429/resourced-limited aware backoff with jitter; fair, non-blocking drain
 
-const nkn = require('nkn-sdk');
-const fs = require('fs');
+const nkn  = require('nkn-sdk');
+const fs   = require('fs');
 const path = require('path');
 
 const SEED_HEX = (process.env.NKN_SEED_HEX || '').trim().toLowerCase().replace(/^0x/,'');
@@ -61,6 +70,14 @@ const PEER_HARD_TTL_MS = Math.max(600_000, parseInt(process.env.PEER_HARD_TTL_MS
 const ROSTER_PUSH_MS   = Math.max(5_000, parseInt(process.env.ROSTER_PUSH_MS || '15000', 10) || 15000);
 const PEERS_PATH       = (process.env.PEERS_PATH && process.env.PEERS_PATH.trim()) || path.join(process.cwd(), 'peers.json');
 
+// Throughput/Backoff knobs
+const SEND_BURST          = Math.max(1, parseInt(process.env.SEND_BURST || '10', 10));
+const SEND_REFILL_PER_SEC = Math.max(1, parseInt(process.env.SEND_REFILL_PER_SEC || '20', 10));
+const SEND_MAX_INFLIGHT   = Math.max(1, parseInt(process.env.SEND_MAX_INFLIGHT || '64', 10));
+const SEND_MAX_QUEUE      = Math.max(100, parseInt(process.env.SEND_MAX_QUEUE || '10000', 10));
+const SEND_MIN_RETRY_MS   = Math.max(50, parseInt(process.env.SEND_MIN_RETRY_MS || '200', 10));
+const SEND_MAX_RETRY_MS   = Math.max(SEND_MIN_RETRY_MS, parseInt(process.env.SEND_MAX_RETRY_MS || '10000', 10));
+
 const DEFAULT_WS_SEEDS = [
   'wss://66-113-14-95.ipv4.nknlabs.io:30004',
   'wss://3-137-144-60.ipv4.nknlabs.io:30004',
@@ -71,7 +88,7 @@ const SEED_WS_ADDR = ENV_WS.length ? ENV_WS : DEFAULT_WS_SEEDS.slice();
 
 let flapTimes = [];  // timestamps of WS close/connectFailed
 const FLAP_WINDOW_MS = 60_000;
-const FLAP_MAX = 10; // exit() if > 10 events in 60s → wrapper restarts us
+const FLAP_MAX = 10; // exit() if > 10 events in 60s → wrapper restarts
 
 function noteFlap() {
   const now = Date.now();
@@ -157,18 +174,147 @@ function rosterItems() {
   return items;
 }
 
-async function sendRoster(toAddr) {
-  const payload = JSON.stringify({ type: 'peers', ts: now(), items: rosterItems() });
-  try { await client.send(toAddr, payload, { noReply: true, maxHoldingSeconds: 120 }); }
-  catch (e) { console.warn('[roster send warn]', e?.message || e); }
+// ─────────────────────────────────────────────────────────────
+// Outbox: per-peer, rate-aware, 429-safe, fair draining
+// ─────────────────────────────────────────────────────────────
+const perPeerState = new Map(); // addr -> {q, tokens, lastRefill, inFlight, backoffMs, rateUntil}
+
+function getPeerState(addr) {
+  let s = perPeerState.get(addr);
+  if (!s) {
+    s = {
+      q: [],
+      tokens: SEND_BURST,
+      lastRefill: now(),
+      inFlight: 0,
+      backoffMs: SEND_MIN_RETRY_MS,
+      rateUntil: 0,
+    };
+    perPeerState.set(addr, s);
+  }
+  return s;
 }
-async function pushRosterToAll() {
-  const payload = JSON.stringify({ type: 'peers', ts: now(), items: rosterItems() });
+
+function refillTokens(s) {
+  const t = now();
+  const dt = (t - s.lastRefill) / 1000;
+  if (dt <= 0) return;
+  s.tokens = Math.min(SEND_BURST, s.tokens + dt * SEND_REFILL_PER_SEC);
+  s.lastRefill = t;
+}
+
+function isRateLimitError(e) {
+  const msg = (e && (e.message || e.toString())) || '';
+  if (typeof e?.status === 'number' && e.status === 429) return true;
+  if (typeof e?.code === 'number' && e.code === 429) return true;
+  return /429|too many requests|rate.*limit/i.test(msg);
+}
+
+function jitter(ms) {
+  const j = Math.floor((Math.random() - 0.5) * 0.3 * ms); // ±15%
+  return Math.max(0, ms + j);
+}
+
+function enqueue(toAddr, payload) {
+  const s = getPeerState(toAddr);
+  if (s.q.length >= SEND_MAX_QUEUE) {
+    // Drop oldest to keep moving; prefer freshness for presence/pose/video frames
+    s.q.shift();
+  }
+  s.q.push(payload);
+  scheduleDrain();
+}
+
+function enqueueMany(targets, payload) {
+  for (const to of targets) enqueue(to, payload);
+}
+
+let draining = false;
+function scheduleDrain() {
+  if (draining) return;
+  draining = true;
+  setImmediate(drainOnce);
+}
+
+function sendOne(addr, s, payload) {
+  s.inFlight++;
+  return client.send(addr, payload, { noReply: true, maxHoldingSeconds: 120 })
+    .then(() => {
+      s.inFlight--;
+      // success: ease backoff
+      s.backoffMs = Math.max(SEND_MIN_RETRY_MS, Math.floor(s.backoffMs * 0.6));
+      // schedule further draining quickly
+      scheduleDrain();
+    })
+    .catch((e) => {
+      s.inFlight--;
+      // push back for retry
+      s.q.unshift(payload);
+      let ms = s.backoffMs;
+      if (isRateLimitError(e)) {
+        ms = Math.min(SEND_MAX_RETRY_MS, Math.max(s.backoffMs * 2, SEND_MIN_RETRY_MS));
+        console.warn(`[rate-limit] to ${addr} — backing off ${ms}ms`);
+      } else {
+        ms = Math.min(5000, Math.max(Math.floor(s.backoffMs * 1.3), SEND_MIN_RETRY_MS));
+        const em = (e && (e.message || e.toString())) || e;
+        console.warn(`[send warn] to ${addr}: ${em} — retry in ${ms}ms`);
+      }
+      s.backoffMs = ms;
+      s.rateUntil = now() + jitter(ms);
+      scheduleDrain();
+    });
+}
+
+function drainOnce() {
+  const start = now();
+  let iterations = 0;
+  let progress = false;
+
+  // simple fair iteration over peers
+  for (const [addr, s] of perPeerState.entries()) {
+    // Refill tokens first
+    refillTokens(s);
+
+    // Skip if backoff active or inflight cap reached
+    if (s.inFlight >= SEND_MAX_INFLIGHT) continue;
+    if (s.rateUntil && now() < s.rateUntil) continue;
+
+    // While we have tokens and work, send
+    while (s.tokens >= 1 && s.q.length && s.inFlight < SEND_MAX_INFLIGHT) {
+      const payload = s.q.shift();
+      s.tokens -= 1;
+      sendOne(addr, s, payload);
+      progress = true;
+
+      iterations++;
+      // avoid monopolizing the event-loop
+      if (iterations >= 1000 || (now() - start) > 12) {
+        // schedule another pass
+        setImmediate(drainOnce);
+        draining = false;
+        return;
+      }
+    }
+  }
+
+  draining = false;
+  if (progress) {
+    // we made progress; schedule another micro-pass to keep draining
+    scheduleDrain();
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Roster pushes via outbox (non-blocking)
+// ─────────────────────────────────────────────────────────────
+function rosterTargets() {
   const targets = [];
   for (const [, meta] of peers.entries()) if (meta.addr) targets.push(meta.addr);
-  await Promise.allSettled(
-    targets.map(to => client.send(to, payload, { noReply: true, maxHoldingSeconds: 120 }).catch(()=>{}))
-  );
+  return targets;
+}
+function pushRosterQueued() {
+  const payload = JSON.stringify({ type: 'peers', ts: now(), items: rosterItems() });
+  enqueueMany(rosterTargets(), payload);
 }
 
 function reap() {
@@ -197,15 +343,11 @@ function ensurePeer(src) {
   return { pub, p };
 }
 
-async function broadcastVerbatim(fromPub, payload) {
+function broadcastQueued(fromPub, payload) {
   const targets = [];
   for (const [pub, meta] of peers.entries()) if (pub !== fromPub && meta.addr) targets.push(meta.addr);
   if (targets.length === 0) return;
-  await Promise.allSettled(
-    targets.map(to => client.send(to, payload, { noReply: true, maxHoldingSeconds: 120 }).catch(e=>{
-      console.warn(`[send warn] ${fromPub} → ${to}: ${e?.message || e}`);
-    }))
-  );
+  enqueueMany(targets, payload);
 }
 
 // Health guard: if not ready for too long, exit for wrapper restart
@@ -245,10 +387,10 @@ client.on('connect', () => {
   lastConnectAt = now();
   console.log(`ready ${client.addr} id=${IDENTIFIER} sub=${NUM_SUB_CLIENTS}`);
   // Immediately advertise a roster built from disk (vestigial peers included)
-  pushRosterToAll().catch(()=>{});
+  pushRosterQueued();
   // Start periodic roster pushes
   if (typeof globalThis._rosterTimer !== 'number') {
-    globalThis._rosterTimer = setInterval(()=> pushRosterToAll().catch(()=>{}), ROSTER_PUSH_MS);
+    globalThis._rosterTimer = setInterval(pushRosterQueued, ROSTER_PUSH_MS);
   }
 });
 
@@ -268,7 +410,7 @@ client.on('message', async ({ src, payload }) => {
     if (t === 'hb') {
       // heartbeat ack
       const ack = { type: 'hb_ack', ts: now(), t_client: msg.t_client || null };
-      try { await client.send(src, JSON.stringify(ack), { noReply: true, maxHoldingSeconds: 120 }); } catch {}
+      enqueue(src, JSON.stringify(ack)); // queue instead of await
       p.lastSeen = now(); p.online = true; return;
     }
     if (t === 'join') {
@@ -277,13 +419,10 @@ client.on('message', async ({ src, payload }) => {
         p.lastLoc = { lat: msg.loc.lat, lon: msg.loc.lon };
         p.precisionDeg = msg?.precision?.deg;
       }
-      try {
-        await client.send(src, JSON.stringify({ type:'joined', ts: now(), addr: client.addr, prefix: IDENTIFIER }),
-                          { noReply: true, maxHoldingSeconds: 120 });
-      } catch {}
-      await sendRoster(src);
+      enqueue(src, JSON.stringify({ type:'joined', ts: now(), addr: client.addr, prefix: IDENTIFIER }));
+      pushRosterQueued();
       safeWritePeers();
-      await broadcastVerbatim(pub, text);
+      broadcastQueued(pub, text);
       return;
     }
     if (t === 'loc') {
@@ -293,22 +432,22 @@ client.on('message', async ({ src, payload }) => {
       }
       p.lastSeen = now(); p.online = true;
       persistSoon();
-      await broadcastVerbatim(pub, text);
+      broadcastQueued(pub, text);
       return;
     }
     if (t === 'leave') {
       p.lastSeen = now(); p.online = false;
       persistSoon();
-      await broadcastVerbatim(pub, text);
+      broadcastQueued(pub, text);
       return;
     }
     // Unknown json → broadcast after join
-    await broadcastVerbatim(pub, text);
+    broadcastQueued(pub, text);
     return;
   }
 
   // Non-JSON payloads: only after join
-  await broadcastVerbatim(pub, payload);
+  broadcastQueued(pub, payload);
 });
 
 client.on('error', (e) => { console.warn('[nkn error]', e?.message || e); noteFlap(); });
@@ -316,10 +455,8 @@ client.on('connectFailed', (e) => { console.warn('[nkn connect failed]', e?.mess
 client.on('willreconnect', () => console.log('[nkn] will reconnect…'));
 client.on('close', () => { console.log('[nkn] connection closed'); READY = false; noteFlap(); });
 
-setInterval(()=> {
-  // mark vestigial vs online; prune very old
-  reap();
-}, Math.min(PEER_TTL_MS, 60_000));
+// Periodic maintenance
+setInterval(()=> { reap(); }, Math.min(PEER_TTL_MS, 60_000));
 
 // graceful shutdown
 function shutdown(code=0){ try{ client.close && client.close(); }catch{} try{ safeWritePeers(); }catch{} setTimeout(()=>process.exit(code), 200); }
@@ -374,6 +511,9 @@ class Runner:
         if "PEER_TTL_MS" in os.environ: e["PEER_TTL_MS"] = os.environ["PEER_TTL_MS"]
         if "PEER_HARD_TTL_MS" in os.environ: e["PEER_HARD_TTL_MS"] = os.environ["PEER_HARD_TTL_MS"]
         if "ROSTER_PUSH_MS" in os.environ: e["ROSTER_PUSH_MS"] = os.environ["ROSTER_PUSH_MS"]
+        # New knobs are pass-through as well (optional)
+        for k in ("SEND_BURST","SEND_REFILL_PER_SEC","SEND_MAX_INFLIGHT","SEND_MAX_QUEUE","SEND_MIN_RETRY_MS","SEND_MAX_RETRY_MS"):
+            if k in os.environ: e[k] = os.environ[k]
         e.setdefault("PEERS_PATH", str(DEFAULT_PEERS_JSON))
         return e
 
